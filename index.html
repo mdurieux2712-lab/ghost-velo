@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>Ghost Vélo</title>
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Ghost Vélo">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <style>
+    :root {
+      --bg: #000;
+      --panel: #121214;
+      --panel-2: #1c1c1f;
+      --line: #2a2a2e;
+      --text: #f4f4f5;
+      --muted: #8e8e93;
+      --ahead: #12a150;
+      --ahead-hi: #2fe07a;
+      --behind: #d92d20;
+      --behind-hi: #ff5a4a;
+      --accent: #ffd60a;
+      --ghost: #c7c7cc;
+      --radius: 18px;
+      --safe-t: env(safe-area-inset-top, 0px);
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --num: ui-rounded, "SF Pro Rounded", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+    body {
+      font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+      overscroll-behavior: none;
+      -webkit-user-select: none; user-select: none;
+    }
+    button { font: inherit; color: inherit; border: 0; cursor: pointer; }
+    .num { font-family: var(--num); font-variant-numeric: tabular-nums; }
+
+    .screen {
+      display: none; flex-direction: column; min-height: 100dvh;
+      padding: calc(var(--safe-t) + 14px) 14px calc(var(--safe-b) + 14px);
+      gap: 12px; max-width: 560px; margin: 0 auto;
+    }
+    .screen.active { display: flex; }
+    #race.active, #record.active { height: 100dvh; min-height: 0; overflow: hidden; gap: 10px; }
+    #race .metric .v, #record .metric .v { font-size: 32px; }
+    #race .metric { padding: 8px 14px; }
+    .map .gps { position: absolute; right: 10px; top: 8px; }
+
+    /* ---------- Accueil ---------- */
+    .brand { display: flex; align-items: center; gap: 10px; padding: 6px 2px 4px; }
+    .brand img { width: 40px; height: 40px; border-radius: 10px; }
+    .brand h1 { margin: 0; font-size: 26px; letter-spacing: -0.5px; }
+    .brand .spacer { flex: 1; }
+    .icon-btn { background: var(--panel-2); width: 42px; height: 42px; border-radius: 12px; font-size: 20px; }
+
+    .btn {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      min-height: 60px; border-radius: var(--radius); font-size: 18px; font-weight: 700;
+      background: var(--panel-2); padding: 0 18px;
+    }
+    .btn.primary { background: var(--accent); color: #000; }
+    .btn.rec { background: var(--behind); color: #fff; }
+    .btn.go { background: var(--ahead); color: #fff; }
+    .btn.big { min-height: 76px; font-size: 22px; }
+    .btn.ghostly { background: transparent; border: 1.5px solid var(--line); }
+    .row { display: flex; gap: 10px; }
+    .row > * { flex: 1; }
+
+    .section-title { color: var(--muted); font-size: 13px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; margin: 10px 2px 0; }
+    .route {
+      background: var(--panel); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 12px;
+      border: 1px solid var(--line);
+    }
+    .route-head { display: flex; align-items: flex-start; gap: 10px; }
+    .route-head .name { font-size: 19px; font-weight: 700; flex: 1; word-break: break-word; }
+    .route-meta { display: flex; gap: 16px; color: var(--muted); font-size: 14px; flex-wrap: wrap; }
+    .route-meta b { color: var(--text); font-size: 17px; }
+    .route canvas { width: 100%; height: 90px; display: block; }
+    .empty { color: var(--muted); text-align: center; padding: 30px 16px; line-height: 1.5; background: var(--panel); border-radius: var(--radius); }
+
+    /* ---------- Écrans de course ---------- */
+    .delta {
+      border-radius: 22px; padding: 14px 14px 12px; text-align: center;
+      background: #3a3a3c; transition: background-color .35s ease;
+    }
+    .delta.ahead { background: var(--ahead); }
+    .delta.behind { background: var(--behind); }
+    .delta .label { font-size: 15px; font-weight: 900; letter-spacing: 3px; opacity: .9; }
+    .delta .value { font-size: min(20vw, 100px); font-weight: 800; line-height: 1; margin: 4px 0 2px; }
+    .delta .sub { font-size: 22px; font-weight: 700; opacity: .95; }
+
+    .banner { border-radius: 14px; padding: 12px 14px; font-weight: 700; text-align: center; font-size: 17px; }
+    .banner.warn { background: var(--accent); color: #000; }
+    .banner.info { background: var(--panel-2); }
+    .hidden { display: none !important; }
+
+    .gauge { background: var(--panel); border-radius: var(--radius); padding: 8px 12px 10px; }
+    .gauge-top { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; font-weight: 600; }
+    .gauge-track { position: relative; height: 32px; margin-top: 6px; border-radius: 10px; background: var(--panel-2); overflow: hidden; }
+    .gauge-track .mid { position: absolute; left: 50%; top: 4px; bottom: 4px; width: 4px; margin-left: -2px; background: var(--ghost); border-radius: 2px; }
+    .gauge-track .me { position: absolute; top: 5px; bottom: 5px; width: 18px; margin-left: -9px; border-radius: 6px; background: var(--text); transition: left .5s ease; left: 50%; }
+    .gauge-track .me.ahead { background: var(--ahead-hi); }
+    .gauge-track .me.behind { background: var(--behind-hi); }
+
+    .map { background: var(--panel); border-radius: var(--radius); flex: 1; min-height: 110px; position: relative; overflow: hidden; }
+    .map canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .legend { position: absolute; left: 10px; bottom: 8px; font-size: 12px; color: var(--muted); display: flex; gap: 12px; }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .metric { background: var(--panel); border-radius: var(--radius); padding: 10px 14px; }
+    .metric .t { color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: 1.2px; }
+    .metric .v { font-size: 38px; font-weight: 800; line-height: 1.1; }
+    .metric .u { color: var(--muted); font-size: 15px; font-weight: 600; margin-left: 3px; }
+    .metric.wide { grid-column: span 2; }
+    .progress { height: 6px; background: var(--panel-2); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+    .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .5s; }
+
+    .gps { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; justify-content: center; }
+    .gps .dot { margin: 0; }
+
+    /* Écran d'enregistrement */
+    .rec-head { display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 900; letter-spacing: 3px; color: var(--behind-hi); }
+    .rec-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--behind-hi); animation: blink 1.2s infinite; }
+    @keyframes blink { 50% { opacity: .2; } }
+    .clock { font-size: min(24vw, 120px); font-weight: 800; text-align: center; line-height: 1; margin: 10px 0; }
+
+    /* Armement */
+    .armed { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 12px; padding: 20px 0; }
+    .armed .big { font-size: min(20vw, 96px); font-weight: 800; }
+    .armed p { color: var(--muted); font-size: 18px; margin: 0; line-height: 1.4; max-width: 340px; }
+
+    /* Résultat */
+    .result { text-align: center; padding: 20px 0 6px; }
+    .result h2 { margin: 0 0 8px; font-size: 30px; }
+    .result .value { font-size: 72px; font-weight: 800; }
+
+    /* Modale */
+    .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: flex; align-items: flex-end; justify-content: center; z-index: 10; padding: 14px; padding-bottom: calc(var(--safe-b) + 14px); }
+    .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 18px; width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 12px; }
+    .modal h3 { margin: 0; font-size: 20px; }
+    .modal p { margin: 0; color: var(--muted); line-height: 1.45; }
+    .modal input[type=text] { font: inherit; font-size: 18px; padding: 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--text); -webkit-user-select: text; user-select: text; }
+    .toggle { display: flex; align-items: center; justify-content: space-between; padding: 12px 2px; border-bottom: 1px solid var(--line); font-size: 17px; }
+    .toggle input { width: 26px; height: 26px; accent-color: var(--ahead); }
+    .small { color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .toast { position: fixed; left: 50%; top: calc(var(--safe-t) + 14px); transform: translateX(-50%); background: var(--text); color: #000; padding: 10px 16px; border-radius: 12px; font-weight: 700; z-index: 20; max-width: 90vw; text-align: center; }
+    .sim-tag { position: fixed; right: 10px; top: calc(var(--safe-t) + 8px); background: var(--accent); color: #000; font-size: 12px; font-weight: 900; padding: 4px 8px; border-radius: 8px; z-index: 5; letter-spacing: 1px; }
+  </style>
+</head>
+<body>
+  <!-- ================= ACCUEIL ================= -->
+  <section id="home" class="screen active">
+    <div class="brand">
+      <img src="icons/icon-192.png" alt="">
+      <h1>Ghost Vélo</h1>
+      <div class="spacer"></div>
+      <button class="icon-btn" id="btnSettings" aria-label="Réglages">⚙︎</button>
+    </div>
+    <button class="btn rec big" id="btnRecord">● Enregistrer un parcours</button>
+    <div class="row">
+      <button class="btn ghostly" id="btnImport">Importer un GPX</button>
+      <button class="btn ghostly" id="btnDemo">Parcours démo</button>
+    </div>
+    <input type="file" id="fileInput" class="hidden">
+    <div class="section-title">Mes fantômes</div>
+    <div id="routeList"></div>
+  </section>
+
+  <!-- ================= ENREGISTREMENT ================= -->
+  <section id="record" class="screen">
+    <div class="rec-head"><div class="rec-dot"></div>ENREGISTREMENT</div>
+    <div class="clock num" id="recClock">0:00</div>
+    <div class="metrics">
+      <div class="metric"><div class="t">VITESSE</div><div class="v num"><span id="recSpeed">0.0</span><span class="u">km/h</span></div></div>
+      <div class="metric"><div class="t">DISTANCE</div><div class="v num"><span id="recDist">0.00</span><span class="u">km</span></div></div>
+    </div>
+    <div class="map"><canvas id="recMap"></canvas></div>
+    <div class="gps" id="recGps"></div>
+    <button class="btn big" id="btnRecStop">■ Arrêter</button>
+  </section>
+
+  <!-- ================= COURSE ================= -->
+  <section id="race" class="screen">
+    <div id="raceArmed" class="armed">
+      <div class="small" id="armedName"></div>
+      <p id="armedText">Recherche du GPS…</p>
+      <div class="big num" id="armedDist">—</div>
+      <p class="small">Le chrono démarre tout seul quand tu passes la ligne de départ.</p>
+    </div>
+    <div id="raceLive" class="hidden" style="display:flex;flex-direction:column;gap:10px;flex:1;min-height:0">
+      <div class="delta" id="deltaBox">
+        <div class="label" id="deltaLabel">C'EST PARTI</div>
+        <div class="value num" id="deltaValue">0 s</div>
+        <div class="sub num" id="deltaSub">0 m</div>
+      </div>
+      <div class="banner warn hidden" id="offBanner">⚠︎ Hors parcours — rejoins la trace</div>
+      <div class="gauge">
+        <div class="gauge-top"><span>← derrière</span><span id="gaugeScale">fantôme ±100 m</span><span>devant →</span></div>
+        <div class="gauge-track"><div class="mid"></div><div class="me" id="gaugeMe"></div></div>
+      </div>
+      <div class="map"><canvas id="raceMap"></canvas>
+        <div class="legend"><span><span class="dot" style="background:var(--ghost)"></span>fantôme</span><span><span class="dot" style="background:var(--accent)"></span>toi</span></div>
+        <div class="gps" id="raceGpsLive"></div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><div class="t">VITESSE</div><div class="v num"><span id="raceSpeed">0.0</span><span class="u">km/h</span></div></div>
+        <div class="metric"><div class="t">TEMPS</div><div class="v num" id="raceTime">0:00</div></div>
+        <div class="metric wide"><div class="t">DISTANCE</div><div class="v num"><span id="raceDist">0.00</span><span class="u" id="raceTotal">/ 0.00 km</span></div><div class="progress"><div id="raceProgress"></div></div></div>
+      </div>
+    </div>
+    <div class="gps" id="raceGps"></div>
+    <div class="row">
+      <button class="btn" id="btnRaceStop">■ Arrêter</button>
+      <button class="btn go" id="btnStartNow">Départ maintenant</button>
+    </div>
+  </section>
+
+  <!-- ================= RÉSULTAT ================= -->
+  <section id="result" class="screen">
+    <div class="result">
+      <h2 id="resTitle">Arrivée !</h2>
+      <div class="small" id="resName"></div>
+      <div class="value num" id="resTime">0:00</div>
+      <div class="delta" id="resDelta" style="margin-top:12px">
+        <div class="label" id="resDeltaLabel"></div>
+        <div class="value num" id="resDeltaValue" style="font-size:64px"></div>
+        <div class="sub" id="resGhostTime"></div>
+      </div>
+    </div>
+    <button class="btn primary big" id="btnResReplace">Ce temps devient le fantôme</button>
+    <button class="btn" id="btnResSaveNew">Garder aussi comme nouveau parcours</button>
+    <button class="btn ghostly" id="btnResHome">Retour à l'accueil</button>
+  </section>
+
+  <div id="modalRoot"></div>
+
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
