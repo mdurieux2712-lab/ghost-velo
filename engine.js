@@ -155,6 +155,103 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Filtre GPS : rejet des positions aberrantes + lissage (filtre de Kalman)
+  // ---------------------------------------------------------------------------
+  /**
+   * Filtre de Kalman « vitesse constante », un par axe (est / nord), en mètres.
+   * - Les positions peu précises (accuracy élevée) pèsent peu dans le résultat.
+   * - Les sauts incompatibles avec le mouvement (test statistique à 4 σ) sont rejetés.
+   * - Si plusieurs positions de suite sont rejetées, c'est le filtre qui avait tort : on repart.
+   */
+  class GpsFilter {
+    constructor(opts) {
+      opts = opts || {};
+      this.maxAccuracy = opts.maxAccuracy || 30; // m : au-delà, la position est ignorée
+      this.accel = opts.accel || 2.0; // m/s² : accélération plausible d'un vélo (bruit de processus)
+      this.gate = opts.gate || 16; // seuil du test d'aberration (4 σ au carré)
+      this.reset();
+    }
+    reset() {
+      this.origin = null;
+      this.x = null; // état axe est : [position, vitesse] + covariance
+      this.y = null;
+      this.ts = null;
+      this.rejectStreak = 0;
+      this.goodStreak = 0; // nombre de positions précises consécutives (calage du GPS)
+    }
+    _axis(z, R) {
+      return { p: z, v: 0, P00: R, P01: 0, P11: 25 }; // vitesse initiale inconnue (± 5 m/s)
+    }
+    _predict(s, dt) {
+      const q = this.accel * this.accel;
+      s.p += s.v * dt;
+      const P00 = s.P00 + dt * (2 * s.P01 + dt * s.P11) + q * dt ** 4 / 4;
+      const P01 = s.P01 + dt * s.P11 + q * dt ** 3 / 2;
+      const P11 = s.P11 + q * dt * dt;
+      s.P00 = P00; s.P01 = P01; s.P11 = P11;
+    }
+    _update(s, z, R) {
+      const S = s.P00 + R;
+      const k0 = s.P00 / S, k1 = s.P01 / S;
+      const y = z - s.p;
+      s.p += k0 * y; s.v += k1 * y;
+      const P00 = (1 - k0) * s.P00, P01 = (1 - k0) * s.P01, P11 = s.P11 - k1 * s.P01;
+      s.P00 = P00; s.P01 = P01; s.P11 = P11;
+    }
+    /**
+     * fix : {lat, lon, ele, accuracy, speed, ts}
+     * Renvoie {ok, reason, fix} — fix est la position lissée (si ok).
+     */
+    process(fix) {
+      const acc = Math.max(3, fix.accuracy == null ? 10 : fix.accuracy);
+      if (acc > this.maxAccuracy) { this.goodStreak = 0; return { ok: false, reason: 'imprécis' }; }
+      if (!this.origin) this.origin = { lat: fix.lat, lon: fix.lon, kx: R * Math.cos(fix.lat * RAD) * RAD };
+      const o = this.origin;
+      const zx = (fix.lon - o.lon) * o.kx, zy = (fix.lat - o.lat) * R * RAD;
+      const Rm = acc * acc;
+
+      if (!this.x || this.ts == null) {
+        this.x = this._axis(zx, Rm); this.y = this._axis(zy, Rm); this.ts = fix.ts;
+      } else {
+        const dt = (fix.ts - this.ts) / 1000;
+        if (dt <= 0) return { ok: false, reason: 'doublon' };
+        const sx = Object.assign({}, this.x), sy = Object.assign({}, this.y);
+        this._predict(sx, Math.min(dt, 30)); this._predict(sy, Math.min(dt, 30));
+        // Test d'aberration : écart observé vs écart attendu
+        const ex = zx - sx.p, ey = zy - sy.p;
+        const d2 = (ex * ex) / (sx.P00 + Rm) + (ey * ey) / (sy.P00 + Rm);
+        if (d2 > this.gate && this.rejectStreak < 4) {
+          this.rejectStreak++;
+          return { ok: false, reason: 'saut' };
+        }
+        if (d2 > this.gate) { // 5 rejets d'affilée : on fait confiance au GPS et on repart
+          sx.p = zx; sy.p = zy; sx.v = 0; sy.v = 0; sx.P00 = sy.P00 = Rm; sx.P11 = sy.P11 = 25; sx.P01 = sy.P01 = 0;
+        } else {
+          this._update(sx, zx, Rm); this._update(sy, zy, Rm);
+        }
+        this.x = sx; this.y = sy; this.ts = fix.ts;
+      }
+      this.rejectStreak = 0;
+      this.goodStreak = acc <= 20 ? this.goodStreak + 1 : 0;
+      const filtSpeed = Math.hypot(this.x.v, this.y.v);
+      return {
+        ok: true,
+        fix: {
+          lat: o.lat + this.y.p / (R * RAD),
+          lon: o.lon + this.x.p / o.kx,
+          ele: fix.ele,
+          accuracy: Math.sqrt((this.x.P00 + this.y.P00) / 2),
+          rawAccuracy: fix.accuracy,
+          // La vitesse Doppler de l'iPhone est très fiable ; sinon celle du filtre.
+          speed: fix.speed != null && fix.speed >= 0 ? fix.speed : filtSpeed,
+          ts: fix.ts,
+          warm: this.goodStreak,
+        },
+      };
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Enregistreur de trace
   // ---------------------------------------------------------------------------
   class Recorder {
@@ -401,6 +498,6 @@ ${pts}
 
   root.GhostEngine = {
     haversine, cleanPoints, prepareGhost, timeAtDist, distAtTime, posAtDist,
-    projectRange, projectTracked, Recorder, GhostRace, parseGPX, toGPX,
+    projectRange, projectTracked, GpsFilter, Recorder, GhostRace, parseGPX, toGPX,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -180,19 +180,25 @@
   // ===========================================================================
   const Clock = { sim: null, now() { return this.sim ? this.sim.now() : Date.now(); } };
 
+  const LOG_KEY = 'ghostvelo.lastlog';
   const GPS = {
-    watchId: null, sim: null, last: null,
+    watchId: null, sim: null, filter: null, log: [],
+    /**
+     * onFix reçoit la position LISSÉE par le filtre, ou {rejected:true, rawAccuracy}
+     * quand la position brute a été écartée (imprécise ou aberrante).
+     */
     start(onFix, onError) {
       this.stop();
-      this.last = null;
-      const handle = (fix) => {
-        // iOS fournit généralement la vitesse ; sinon on la calcule.
-        if ((fix.speed == null || fix.speed < 0) && this.last && fix.ts > this.last.ts) {
-          const v = E.haversine(this.last, fix) / ((fix.ts - this.last.ts) / 1000);
-          fix.speed = this.last.speed != null ? 0.6 * this.last.speed + 0.4 * v : v;
+      this.filter = new E.GpsFilter();
+      this.log = [];
+      const handle = (raw) => {
+        const r = this.filter.process(raw);
+        if (this.log.length < 30000) {
+          this.log.push([raw.ts, raw.lat.toFixed(7), raw.lon.toFixed(7), Math.round(raw.accuracy || 0), raw.speed == null ? '' : raw.speed.toFixed(2),
+            r.ok ? 1 : 0, r.ok ? r.fix.lat.toFixed(7) : '', r.ok ? r.fix.lon.toFixed(7) : '', r.ok ? '' : r.reason]);
         }
-        this.last = fix;
-        onFix(fix);
+        if (!r.ok) { onFix({ rejected: true, reason: r.reason, rawAccuracy: raw.accuracy, ts: raw.ts }); return; }
+        onFix(r.fix);
       };
       if (this.sim) { this.sim.start(handle); return; }
       if (!('geolocation' in navigator)) { onError({ code: 0, message: 'GPS non disponible sur cet appareil' }); return; }
@@ -211,8 +217,29 @@
       if (this.watchId != null) navigator.geolocation.clearWatch(this.watchId);
       this.watchId = null;
       if (this.sim) this.sim.stop();
+      // On garde le journal brut de la dernière sortie (pour diagnostiquer le GPS)
+      if (this.log.length > 5 && !this.sim) {
+        try { localStorage.setItem(LOG_KEY, JSON.stringify({ date: Date.now(), rows: this.log })); } catch (e) {}
+      }
+      this.log = [];
     },
   };
+
+  async function exportGpsLog() {
+    let data = null;
+    try { data = JSON.parse(localStorage.getItem(LOG_KEY)); } catch (e) {}
+    if (!data || !data.rows || !data.rows.length) { toast('Aucun journal GPS pour l\'instant'); return; }
+    const csv = 'horodatage_ms;lat_brute;lon_brute;precision_m;vitesse_ms;gardee;lat_lissee;lon_lissee;motif_rejet\n' +
+      data.rows.map((r) => r.join(';')).join('\n');
+    const name = `journal_gps_${new Date(data.date).toISOString().slice(0, 16).replace(/[-:T]/g, '')}.csv`;
+    const file = new File([csv], name, { type: 'text/csv' });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+    } catch (e) { if (e && e.name === 'AbortError') return; }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
 
   function gpsErrorText(err) {
     if (err && err.code === 1) return "Accès à la position refusé. Réglages > Confidentialité > Service de localisation : autorise « Sites web Safari » (Lorsque l'app est active, position exacte activée).";
@@ -221,7 +248,7 @@
 
   function gpsLabel(fix) {
     if (!fix) return '<span class="dot" style="background:#8e8e93"></span>Recherche du GPS…';
-    const a = Math.round(fix.accuracy || 0);
+    const a = Math.round(fix.rawAccuracy != null ? fix.rawAccuracy : fix.accuracy || 0);
     const c = a <= 10 ? 'var(--ahead-hi)' : a <= 25 ? 'var(--accent)' : 'var(--behind-hi)';
     return `<span class="dot" style="background:${c}"></span>GPS ± ${a} m${Clock.sim ? ' (simulé)' : ''}`;
   }
@@ -484,6 +511,7 @@
         <label class="toggle">Annonce vocale à chaque kilomètre<input type="checkbox" id="setVoice" ${settings.voice ? 'checked' : ''}></label>
         <p class="small">Conseils : fixe le téléphone au guidon, laisse l'app ouverte (le GPS s'arrête si tu changes d'app ou verrouilles l'écran). Le bouton silencieux de l'iPhone coupe les bips.<br>Les parcours sont stockés uniquement sur ce téléphone : exporte-les en GPX pour les sauvegarder.</p>`,
       buttons: [
+        { label: 'Exporter le journal GPS de la dernière sortie', onClick: exportGpsLog },
         { label: 'Fermer', cls: 'primary', onClick: (box) => {
           settings.beeps = box.querySelector('#setBeeps').checked;
           settings.voice = box.querySelector('#setVoice').checked;
@@ -510,11 +538,16 @@
     setRecStatus('Attente du GPS…');
 
     GPS.start((fix) => {
-      Rec.lastFix = fix;
       $('recGps').innerHTML = gpsLabel(fix);
+      if (fix.rejected) {
+        if (Rec.startedAt == null) setRecStatus(`Calage GPS… ± ${Math.round(fix.rawAccuracy || 0)} m`);
+        return;
+      }
+      Rec.lastFix = fix;
       $('recSpeed').textContent = ((fix.speed || 0) * 3.6).toFixed(1);
       if (Rec.startedAt == null) {
-        if (fix.accuracy > 25) { setRecStatus('Précision GPS insuffisante…'); return; }
+        // On attend 3 positions précises d'affilée avant de déclarer le GPS « calé »
+        if (fix.warm < 3) { setRecStatus(`Calage GPS… ± ${Math.round(fix.rawAccuracy)} m`); return; }
         if (!Rec.anchor) { Rec.anchor = fix; setRecStatus('PRÊT — pars quand tu veux'); say('Prêt. Le chrono démarre dès que tu roules.'); return; }
         const d = E.haversine(Rec.anchor, fix);
         if (d < 8) { if (fix.accuracy < Rec.anchor.accuracy) Rec.anchor = fix; return; }
@@ -625,9 +658,17 @@
   }
 
   function onRaceFix(fix) {
-    Race.lastFix = fix;
     $('raceGps').innerHTML = gpsLabel(fix);
     $('raceGpsLive').innerHTML = gpsLabel(fix);
+    if (fix.rejected) {
+      if (Race.race.state === 'armed') $('armedText').textContent = `Calage GPS… ± ${Math.round(fix.rawAccuracy || 0)} m`;
+      return;
+    }
+    Race.lastFix = fix;
+    if (Race.race.state === 'armed' && fix.warm < 3) {
+      $('armedText').textContent = `Calage GPS… ± ${Math.round(fix.rawAccuracy)} m`;
+      return;
+    }
     const wasArmed = Race.race.state === 'armed';
     const snap = Race.race.update(fix);
     Race.snap = snap;

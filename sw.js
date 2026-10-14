@@ -1,7 +1,7 @@
 /* Service worker : permet à l'app de s'ouvrir sans réseau (en pleine campagne).
  * Stratégie « stale-while-revalidate » : on sert la version en cache tout de suite,
  * et on télécharge la nouvelle version en arrière-plan → elle sera active au lancement suivant. */
-const CACHE = 'ghostvelo-v1';
+const CACHE = 'ghostvelo-v2';
 const FILES = [
   './', 'index.html', 'app.js', 'engine.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
